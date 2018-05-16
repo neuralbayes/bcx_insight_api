@@ -18,31 +18,11 @@ function AddressBalanceService(options) {
     this.lastTipTimeout = false;
     this.lastCheckedBlock = 0;
 
-    this.richerThanInProcess = false;
 
-    this.cacheIntervals = [];
-    this.richerThanCache = [];
     this.richestAddressesListCache = [];
 
 }
 
-/**
- *
- * @param {Function} next
- * @return {*}
- */
-AddressBalanceService.prototype.getIntervals = function (next) {
-    return next(null, this.cacheIntervals);
-};
-
-/**
- *
- * @param {Function} next
- * @return {*}
- */
-AddressBalanceService.prototype.getRicherThan = function (next) {
-    return next(null, this.richerThanCache);
-};
 
 /**
  *
@@ -53,172 +33,6 @@ AddressBalanceService.prototype.getRichestAddressesList = function (next) {
     return next(null, this.richestAddressesListCache);
 };
 
-/**
- *
- * @param {Function} next
- * @return {*}
- */
-AddressBalanceService.prototype.updateRicherThanCache = function (next) {
-
-    if (this.richerThanInProcess) {
-       return next();
-    }
-
-    this.richerThanInProcess = true;
-
-    var self = this,
-        dataFlow = {
-            info: null,
-            items: []
-        };
-
-    return async.waterfall([function (callback) {
-        return self.marketsService.getInfo(function (err, info) {
-
-            if (err) {
-                return callback(err);
-            }
-
-            dataFlow.info = info;
-
-            return callback();
-        });
-    }, function (callback) {
-        return async.eachSeries([1, 100, 1000, 10000, 100000, 1000000, 10000000], function (greaterThanUsd, callback) {
-
-            if (dataFlow.info.price_usd > 0) {
-                return self.addressBalanceRepository.getCountAddressesGreaterThan(greaterThanUsd / dataFlow.info.price_usd, function (err, result) {
-
-                    if (err) {
-                        return callback(err);
-                    }
-
-                    dataFlow.items.push({
-                        amount_usd: greaterThanUsd,
-                        count_addresses: result
-                    });
-
-                    return callback();
-                });
-            }
-
-            return callback();
-
-        }, function (err) {
-            return callback(err);
-        });
-
-    }], function (err) {
-
-        self.richerThanInProcess = false;
-
-        if (err) {
-            return next(err);
-        }
-
-        self.richerThanCache = dataFlow.items;
-
-        return next();
-
-    });
-
-};
-
-/**
- *
- * @param {Function} next
- * @return {*}
- */
-AddressBalanceService.prototype.updateCacheIntervals = function (next) {
-
-    var self = this;
-
-    return async.waterfall([function (callback) {
-
-        return self.addressBalanceRepository.getMaxBalance(function (err, addressBalance) {
-
-            if (err) {
-                return callback(err);
-            }
-
-            if (!addressBalance) {
-                return callback(null, []);
-            }
-
-            var minBorder = MIN_BORDER,
-                intervals = [],
-                balance = new BigNumber(addressBalance.balance.toString()),
-                prevBorder,
-                nextBorder = minBorder;
-
-            intervals.push({
-                max: minBorder,
-                min: 0,
-                count: 0,
-                sum: 0
-            });
-
-            while (balance.isGreaterThanOrEqualTo(nextBorder)) {
-
-                prevBorder = nextBorder;
-                nextBorder = nextBorder * 10;
-
-                intervals.push({
-                    max: nextBorder,
-                    min: prevBorder,
-                    count: 0,
-                    sum: 0
-                });
-
-            }
-
-            return callback(null, intervals);
-
-        });
-
-    }, function (intervals, callback) {
-
-        return async.eachSeries(intervals, function (interval, callback) {
-            return self.addressBalanceRepository.getInfoByInterval(interval.min, interval.max, function (err, info) {
-
-                if (err) {
-                    return callback(err);
-                }
-
-                if (info && info.length) {
-                    interval.count =  info[0].count;
-                    interval.sum = info[0].sum;
-                } else {
-                    interval.count =  0;
-                    interval.sum = 0;
-                }
-
-
-                return callback();
-
-            });
-        }, function (err) {
-
-            if (err) {
-                return callback(err);
-            }
-
-            self.cacheIntervals = intervals;
-
-            return callback();
-
-        });
-
-    }], function (err) {
-
-        if (err) {
-            return next(err);
-        }
-
-        return next();
-    });
-
-};
 
 /**
  *
@@ -269,7 +83,6 @@ AddressBalanceService.prototype.start = function (next) {
 
         });
     }, function (callback) {
-	console.log('getLastBlockByType Staring...');
         return self.lastBlockRepository.getLastBlockByType(TYPE, function(err, existingType) {
 
             if (err) {
@@ -285,7 +98,6 @@ AddressBalanceService.prototype.start = function (next) {
 
         })
     },function (callback) {
-	console.log('getInfo Starting...');
         return self.node.getInfo(function (err, data) {
 
             if (err) {
@@ -304,31 +116,17 @@ AddressBalanceService.prototype.start = function (next) {
             return callback();
         });
     }, function (callback) {
-	console.log('updateCaches Starting...');
         return self._updateCaches(function (err) {
             return callback(err);
         });
     }], function (err) {
-	console.log('final Starting...');
         if (err) {
             self.common.log.error('[AddressBalanceService] start Error', err);
             return next(err);
         }
 
-	console.log('>>>>>>>>>>>>>>>  lastTipHeight is ' +self.lastTipHeight);
         self._rapidProtectedUpdateTip(self.lastTipHeight);
-	console.log('<<<<<<<<<<<<<<<');
         self.node.services.bitcoind.on('tip', self._rapidProtectedUpdateTip.bind(self));
-	console.log('end on1...');
-        self.marketsService.on('updated', function () {
-            return self.updateRicherThanCache(function (err) {
-                if (err) {
-                    self.common.log.error(err);
-                }
-            })
-	console.log('end on2...');
-        });
-	console.log('return next()...');
         return next();
 
     });
@@ -344,7 +142,6 @@ AddressBalanceService.prototype.start = function (next) {
  */
 AddressBalanceService.prototype._processLastBlocks = function(height, next) {
 
-    console.log('>>>>>>>>>>>>>>>> _processLastBlocks');
     var self = this,
         blocks = [];
 
@@ -389,14 +186,6 @@ AddressBalanceService.prototype._updateCaches = function(next) {
     var self = this;
 
     return async.waterfall([function (callback) {
-        return self.updateRicherThanCache(function (err) {
-            return callback(err);
-        });
-    }, function (callback) {
-        return self.updateCacheIntervals(function(err) {
-            return callback(err);
-        });
-    }, function (callback) {
         return self.updateRichestAddressesList(function(err) {
             return callback(err);
         });
@@ -453,11 +242,9 @@ AddressBalanceService.prototype._rapidProtectedUpdateTip = function(height) {
  */
 AddressBalanceService.prototype.processBlock = function (blockHeight, next) {
 
-    console.log('>>>>>>>>>>>>>>> processBlock');
     var self = this;
     return self.node.getBlockOverview(blockHeight, function (err, block) {
 
-	console.log('enter in getBlockOverview');
         if (err) {
             return next(err);
         }
@@ -500,12 +287,10 @@ AddressBalanceService.prototype.processBlock = function (blockHeight, next) {
             }, function (err) {
                 return callback(err);
             });
-	    console.log('function 1>>>>>>');
         }, function (callback) {
 
             var addresses = Object.keys(addressesMap);
 
-	    console.log('addresses.length is '+addresses.length);
             if (!addresses.length) {
                 return callback();
             }
@@ -526,7 +311,6 @@ AddressBalanceService.prototype.processBlock = function (blockHeight, next) {
                         var balanceSat = new BigNumber(result.balance);
                         dataFlow.balance = balanceSat.dividedBy(1e4).toNumber();
 
-			console.log('dataFlow.balance is '+ dataFlow.balance);
                         return callback();
 
                     });
