@@ -1,6 +1,5 @@
 var Common = require('../lib/common');
 var async = require('async');
-var qtumcore = require('bitcore-lib');
 var TYPE = 'BLOCKS_MINED';
 
 function AddressBlocksMinedService(options) {
